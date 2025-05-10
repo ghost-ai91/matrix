@@ -1,0 +1,53 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+Cargo.lock
+!Cargo.toml
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Solana specific
+.anchor/
+.solana/
+test-ledger/
+
+# Private keys and wallets - crucial for security!
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!token-metadata.json
+*.keypair
+*-keypair.json
+id.json
+wallet.json
+*wallet*.json
+
+# Environment variables
+.env
+.env.*
+.env-*
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Node modules (if you have JavaScript components)
+node_modules/
+dist/
+build/
+
+# Deployed program info
+program_dump.so
+
+# Other potential sensitive data
+*.pem
+*.key
+*.secret
