@@ -8,7 +8,7 @@ This program implements a referral matrix system on Solana, where users can regi
 
 ## Project Structure
 
-- `programs/VERIFIED-ADDRESSES/src/`: Solana program source code
+- `programs/matrix-system/src/`: Solana program source code
 - `tests/`: Automated tests
 - `app/`: Client interface (frontend/API)
 
