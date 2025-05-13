@@ -1,12 +1,12 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::{self, program::invoke, program::invoke_signed, clock::Clock};
-use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer};
+use anchor_lang::solana_program::{self, clock::Clock};
+use anchor_spl::token::{self, Token, TokenAccount};
 use anchor_spl::associated_token::AssociatedToken;
 use chainlink_solana as chainlink;
 #[cfg(not(feature = "no-entrypoint"))]
-use {default_env::default_env, solana_security_txt::security_txt};
+use {solana_security_txt::security_txt};
 
-declare_id!("C9nk6GyfmWZQH2CrSTYHcgKe4MaFrfYdKJ2qr4hKb985");
+declare_id!("jFUpBH7wTd9G1EfFADhJCZ89CSujPoh15bdWL5NutT9");
 
 #[cfg(not(feature = "no-entrypoint"))]
 security_txt! {
@@ -36,28 +36,27 @@ const DEFAULT_SOL_PRICE: i128 = 100_00000000; // $100 with 8 decimals
 const MAX_UPLINE_DEPTH: usize = 6;
 
 // Number of Vault A accounts in the remaining_accounts
-const VAULT_A_ACCOUNTS_COUNT: usize = 4;
+const VAULT_A_ACCOUNTS_COUNT: usize = 3;
 
 // Constants for strict address verification
-pub mod VERIFIED_ADDRESSES {
+pub mod verified_addresses {
     use solana_program::pubkey::Pubkey;
     
     // Meteora pool addresses
-    pub static POOL_ADDRESS: Pubkey = solana_program::pubkey!("CBPTSi75JXHrhejScdEsFVFTNgT22MEx7BgXTyRugL84");
-    pub static B_VAULT_LP: Pubkey = solana_program::pubkey!("DkTSUH4PEsGXw18VU3b4nUPtfvabPHzzz3j4KPCyimgp");
+    pub static POOL_ADDRESS: Pubkey = solana_program::pubkey!("CH8thKKhqGLQzwZwNYkEfRdkoxJBALNSSzmW1bVAkwat");
+    pub static B_VAULT_LP: Pubkey = solana_program::pubkey!("HayCbdhLpmqpbqQjjArmCbF9oZumTD7PbvxcHtjf8JhK");
     
     // Token and oracle addresses
-    pub static TOKEN_MINT: Pubkey = solana_program::pubkey!("3qytzVfJSg6yJHEKeN7RiH5i5t8mEEJ2jBezYDrh9ckp");
+    pub static TOKEN_MINT: Pubkey = solana_program::pubkey!("H4T9Y1wGsexYKYshYbqHG3fKhu16nkJhyYQArp1Q1Adj");
     pub static WSOL_MINT: Pubkey = solana_program::pubkey!("So11111111111111111111111111111111111111112");
     
     // Chainlink addresses (Devnet)
-    pub static CHAINLINK_PROGRAM: Pubkey = solana_program::pubkey!("HevSKofvBgfaexv23kMabbYqxasxU3mQ4ibBMEMJWHNY");
+    pub static CHAINLINK_PROGRAM: Pubkey = solana_program::pubkey!("HEvSKofvBgfaexv23kMabbYqxasxU3mQ4ibBMEmJWHny");
     pub static SOL_USD_FEED: Pubkey = solana_program::pubkey!("99B2bTijsU6f1GCT73HmdR7HCFFjGMBcPZY6jZ96ynrR");
 }
 
 // Program state structure
 #[account]
-#[derive(Default)]
 pub struct ProgramState {
     pub owner: Pubkey,
     pub next_upline_id: u32,
@@ -259,14 +258,6 @@ fn force_memory_cleanup() {
     // The vector will be automatically freed when it goes out of scope
 }
 
-// Helper function to derive ATA from wallet and token mint
-fn get_token_ata(wallet: &Pubkey, token_mint: &Pubkey) -> Pubkey {
-    anchor_spl::associated_token::get_associated_token_address(
-        wallet,
-        token_mint
-    )
-}
-
 // Function to get SOL/USD price from Chainlink feed - MODIFICADO
 fn get_sol_usd_price<'info>(
     chainlink_feed: &AccountInfo<'info>,
@@ -441,32 +432,42 @@ fn get_donut_tokens_amount<'info>(
         return Ok(100 * 1_000_000_000); // Fallback to 100 tokens
     }
     
-    // 5. Calculate proportions and values
-    let a_vault_prop_num = a_vault_lp_amount as f64;
-    let a_vault_prop_den = a_vault_lp_supply as f64;
-    let a_vault_proportion = a_vault_prop_num / a_vault_prop_den;
+    // 5. Convert to i128 for safe calculations without floating point
+    let a_lp_amount_big = a_vault_lp_amount as i128;
+    let a_lp_supply_big = a_vault_lp_supply as i128;
+    let b_lp_amount_big = b_vault_lp_amount as i128;
+    let b_lp_supply_big = b_vault_lp_supply as i128;
+    let token_a_big = total_token_a_amount as i128;
+    let token_b_big = total_token_b_amount as i128;
+    let sol_amount_big = sol_amount as i128;
     
-    let b_vault_prop_num = b_vault_lp_amount as f64;
-    let b_vault_prop_den = b_vault_lp_supply as f64;
-    let b_vault_proportion = b_vault_prop_num / b_vault_prop_den;
+    // 6. Calculate pool token values using integer arithmetic
+    let numerator_a = token_a_big.checked_mul(a_lp_amount_big)
+        .ok_or_else(|| error!(ErrorCode::InvalidPriceFeed))?;
     
-    // 6. Calculate the real token values in the pool
-    let pool_token_a = total_token_a_amount as f64 * a_vault_proportion;
-    let pool_token_b = total_token_b_amount as f64 * b_vault_proportion;
+    let numerator_b = token_b_big.checked_mul(b_lp_amount_big)
+        .ok_or_else(|| error!(ErrorCode::InvalidPriceFeed))?;
     
-    if pool_token_a <= 0.0 || pool_token_b <= 0.0 {
-        return Ok(100 * 1_000_000_000); // Fallback to 100 tokens
+    let pool_token_a = numerator_a / a_lp_supply_big;
+    let pool_token_b = numerator_b / b_lp_supply_big;
+    
+    // 7. Check for zero values to avoid division by zero
+    if pool_token_b == 0 {
+        return Ok(100 * 1_000_000_000);
     }
     
-    // 7. Calculate spot price (DONUT per SOL)
-    let donut_per_sol = pool_token_a / pool_token_b;
+    // 8. Calculate DONUT tokens using cross multiplication
+    let numerator_final = sol_amount_big.checked_mul(pool_token_a)
+        .ok_or_else(|| error!(ErrorCode::InvalidPriceFeed))?;
     
-    // 8. Calculate DONUT tokens for the provided SOL value
-    let sol_amount_f = sol_amount as f64 / 1_000_000_000.0; // Convert lamports to SOL
-    let donut_amount = sol_amount_f * donut_per_sol;
+    let donut_tokens_big = numerator_final / pool_token_b;
     
-    // 9. Convert to tokens with 9 decimals
-    let donut_tokens = (donut_amount * 1_000_000_000.0) as u64;
+    // 9. Convert back to u64 with overflow check
+    if donut_tokens_big > i128::from(u64::MAX) {
+        return Ok(100 * 1_000_000_000);
+    }
+    
+    let donut_tokens = donut_tokens_big as u64;
     
     // 10. Validate if we have a realistic value and return
     if donut_tokens == 0 {
@@ -520,12 +521,12 @@ fn verify_all_fixed_addresses<'info>(
     wsol_mint: &Pubkey,
 ) -> Result<()> {
     // Pool and vaults verifications
-    verify_address_strict(pool, &VERIFIED_ADDRESSES::POOL_ADDRESS, ErrorCode::InvalidPoolAddress)?;
-    verify_address_strict(b_vault_lp, &VERIFIED_ADDRESSES::B_VAULT_LP, ErrorCode::InvalidVaultAddress)?;
+    verify_address_strict(pool, &verified_addresses::POOL_ADDRESS, ErrorCode::InvalidPoolAddress)?;
+    verify_address_strict(b_vault_lp, &verified_addresses::B_VAULT_LP, ErrorCode::InvalidVaultAddress)?;
     
     // Token and oracle verifications
-    verify_address_strict(token_mint, &VERIFIED_ADDRESSES::TOKEN_MINT, ErrorCode::InvalidTokenMintAddress)?;
-    verify_address_strict(wsol_mint, &VERIFIED_ADDRESSES::WSOL_MINT, ErrorCode::InvalidTokenMintAddress)?;
+    verify_address_strict(token_mint, &verified_addresses::TOKEN_MINT, ErrorCode::InvalidTokenMintAddress)?;
+    verify_address_strict(wsol_mint, &verified_addresses::WSOL_MINT, ErrorCode::InvalidTokenMintAddress)?;
     
     Ok(())
 }
@@ -535,8 +536,8 @@ fn verify_chainlink_addresses<'info>(
     chainlink_program: &Pubkey,
     chainlink_feed: &Pubkey,
 ) -> Result<()> {
-    verify_address_strict(chainlink_program, &VERIFIED_ADDRESSES::CHAINLINK_PROGRAM, ErrorCode::InvalidChainlinkProgram)?;
-    verify_address_strict(chainlink_feed, &VERIFIED_ADDRESSES::SOL_USD_FEED, ErrorCode::InvalidPriceFeed)?;
+    verify_address_strict(chainlink_program, &verified_addresses::CHAINLINK_PROGRAM, ErrorCode::InvalidChainlinkProgram)?;
+    verify_address_strict(chainlink_feed, &verified_addresses::SOL_USD_FEED, ErrorCode::InvalidPriceFeed)?;
     
     Ok(())
 }
@@ -807,8 +808,11 @@ pub struct RegisterWithoutReferrerDeposit<'info> {
     pub state: Account<'info, ProgramState>,
 
     #[account(mut)]
+    pub owner: Signer<'info>,
+    
+    #[account(mut)]
     pub user_wallet: Signer<'info>,
-
+    
     #[account(
         init,
         payer = user_wallet,
@@ -976,18 +980,23 @@ pub mod referral_system {
         state.owner = ctx.accounts.owner.key();
         state.next_upline_id = 1;
         state.next_chain_id = 1;
-
+        
         Ok(())
     }
     
     // Register without a referrer (owner only)
     pub fn register_without_referrer(ctx: Context<RegisterWithoutReferrerDeposit>, deposit_amount: u64) -> Result<()> {
+        // Verificar se o chamador é o dono do programa
+        if ctx.accounts.owner.key() != ctx.accounts.state.owner {
+            return Err(error!(ErrorCode::NotAuthorized));
+        }
+       
         // STRICT VERIFICATION OF ALL ADDRESSES
         verify_all_fixed_addresses(
             &ctx.accounts.pool.key(),
             &ctx.accounts.b_vault_lp.key(),
             &ctx.accounts.token_mint.key(),
-            &VERIFIED_ADDRESSES::WSOL_MINT,
+            &verified_addresses::WSOL_MINT,
         )?;
 
         // Use global upline ID
@@ -1000,12 +1009,6 @@ pub mod referral_system {
 
         // Create new user data
         let user = &mut ctx.accounts.user;
-
-        // Derive the ATA for tokens for the base user
-        let user_token_account = anchor_spl::associated_token::get_associated_token_address(
-            &ctx.accounts.user_wallet.key(),
-            &ctx.accounts.token_mint.key()
-        );
 
         // Initialize user data with an empty upline structure
         user.is_registered = true;
@@ -1066,11 +1069,10 @@ pub mod referral_system {
         let a_vault_lp = &ctx.remaining_accounts[0];
         let a_vault_lp_mint = &ctx.remaining_accounts[1];
         let a_token_vault = &ctx.remaining_accounts[2];
-        let a_vault = &ctx.remaining_accounts[3];
 
         // Extract Chainlink accounts from remaining_accounts
-        let chainlink_feed = &ctx.remaining_accounts[4];
-        let chainlink_program = &ctx.remaining_accounts[5];
+        let chainlink_feed = &ctx.remaining_accounts[3];
+        let chainlink_program = &ctx.remaining_accounts[4];
 
         // STRICT VERIFICATION OF ALL ADDRESSES
         verify_all_fixed_addresses(
@@ -1560,10 +1562,9 @@ pub mod referral_system {
                             }
                             // SLOT 3: Pay reserved SOL and tokens to upline
                             else if upline_slot_idx == 2 {
-                                // Derive ATA from account owner's wallet
-                                let wallet_to_pay = upline_account_data.owner_wallet;
+ 
                                 
-                                // Pay reserved SOL
+                                 // Pay reserved SOL
                                 if upline_account_data.reserved_sol > 0 {
                                     let reserved_sol = upline_account_data.reserved_sol;
                                     
