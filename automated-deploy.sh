@@ -109,7 +109,8 @@ get_program_version() {
         if [ "$create_tag" = "s" ]; then
             read -p "Digite a versão desejada (ex: v1.0.0): " tag_version
             if [ -n "$tag_version" ]; then
-                git tag -a "$tag_version" -m "Versão $tag_version"
+                # Tentar criar a tag, ignorando erros se já existir
+                git tag -a "$tag_version" -m "Versão $tag_version" 2>/dev/null || true
                 print_message "info" "Tag $tag_version criada localmente"
                 export PROGRAM_VERSION="$tag_version"
             else
@@ -499,31 +500,13 @@ build_with_hash() {
     # Obter a versão do programa
     get_program_version
     
-    # Verificar se lib.rs contém a linha source_revision e source_release
-    LIB_RS_PATH=$(find . -name "lib.rs" | head -n 1)
-    
-    if [ -z "$LIB_RS_PATH" ]; then
-        print_message "error" "Arquivo lib.rs não encontrado!"
-        exit 1
-    fi
-    
-    if ! grep -q "source_revision" "$LIB_RS_PATH"; then
-        print_message "error" "A linha source_revision não foi encontrada em lib.rs!"
-        print_message "error" "Por favor, adicione: source_revision: default_env!(\"GITHUB_SHA\", \"\"),"
-        exit 1
-    fi
-    
-    if ! grep -q "source_release" "$LIB_RS_PATH"; then
-        print_message "warn" "A linha source_release não foi encontrada em lib.rs!"
-        print_message "warn" "Para incluir a versão do programa, adicione: source_release: default_env!(\"PROGRAM_VERSION\", \"\"),"
-    fi
-    
-    # Configurar a variável de ambiente com o hash do commit e versão
+    # Configurar as variáveis de ambiente com o hash do commit e versão
     export GITHUB_SHA=$COMMIT_HASH
+    export PROGRAM_VERSION=${PROGRAM_VERSION:-"0.1.0"}
     
-    # Fazer o build do programa
+    # Fazer o build do programa com as variáveis de ambiente
     print_message "info" "Construindo o programa com o hash do commit incorporado..."
-    anchor build
+    GITHUB_SHA=$COMMIT_HASH PROGRAM_VERSION=$PROGRAM_VERSION anchor build
     build_result=$?
 
     if [ $build_result -ne 0 ]; then
@@ -717,12 +700,19 @@ deploy_program() {
     
     echo "$BUFFER_RESULT"
     
-    # Extrair o ID do buffer
-    BUFFER_ID=$(echo "$BUFFER_RESULT" | grep -oP '(?<=Buffer address: )\S+')
+    # Extrair o ID do buffer - versão melhorada
+    BUFFER_ID=$(echo "$BUFFER_RESULT" | grep -o "Buffer: [A-Za-z0-9]*" | cut -d " " -f 2)
     
+    # Se não conseguir extrair automaticamente, perguntar ao usuário
     if [ -z "$BUFFER_ID" ]; then
-        print_message "error" "Falha ao criar buffer. Não foi possível obter o ID do buffer."
-        exit 1
+        print_message "warn" "Não foi possível extrair o ID do buffer automaticamente."
+        echo "Verifique a saída acima e encontre uma linha como 'Buffer: ABC123...'"
+        read -p "Por favor, digite o ID do buffer manualmente: " BUFFER_ID
+        
+        if [ -z "$BUFFER_ID" ]; then
+            print_message "error" "Nenhum ID de buffer fornecido. Não é possível prosseguir."
+            exit 1
+        fi
     fi
     
     print_message "info" "Buffer criado com sucesso. ID: $BUFFER_ID"

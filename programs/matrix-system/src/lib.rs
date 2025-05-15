@@ -19,8 +19,8 @@ security_txt! {
     policy: "https://github.com/ghost-ai91/matrix/SECURITY.md",
     preferred_languages: "en",
     source_code: "https://github.com/ghost-ai91/matrix/programs/src/lib.rs",
-    source_revision: default_env!("GITHUB_SHA", ""),
-    source_release: default_env!("PROGRAM_VERSION", ""),
+    source_revision: env!("GITHUB_SHA", "unknown-revision"),
+    source_release: env!("PROGRAM_VERSION", "unknown-version"),
     encryption: "",
     auditors: "",
     acknowledgements: "We thank all security researchers who contributed to the security of our protocol."
