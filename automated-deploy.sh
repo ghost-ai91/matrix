@@ -284,6 +284,178 @@ EOF
     fi
 }
 
+# Função para garantir que o SECURITY.md exista e esteja atualizado
+ensure_security_md() {
+    print_message "info" "Verificando e atualizando SECURITY.md..."
+    
+    # Obter o Program ID
+    PROGRAM_ID=$(solana-keygen pubkey $PROGRAM_KEYPAIR 2>/dev/null || echo "Unknown")
+    
+    # Criar ou atualizar o SECURITY.md
+    cat > SECURITY.md << EOF
+# Security Policy for DONUT Referral Matrix System
+
+## Reporting a Vulnerability
+
+If you discover a security vulnerability in our smart contract, please report it through one of the following channels:
+
+- **Email**: [ghostninjax01@gmail.com](mailto:ghostninjax01@gmail.com)
+- **Discord**: \`ghostninjax01\`
+- **WhatsApp**: Contact via email for WhatsApp details
+
+When reporting, please include:
+- A detailed description of the vulnerability
+- Steps to reproduce the issue
+- Potential impact assessment
+- Any suggestions for remediation if available
+
+## Bug Bounty Program
+
+We offer rewards for critical security vulnerabilities found in our smart contract, based on severity:
+
+| Severity | Description | Potential Reward (SOL) |
+|----------|-------------|-------------------|
+| Critical | Issues that allow direct theft of funds, permanent freezing of funds, or unauthorized control of the protocol | 5-20 SOL |
+| High | Issues that could potentially lead to loss of funds under specific conditions | 1-5 SOL |
+| Medium | Issues that don't directly threaten assets but could compromise system integrity | 0.5-1 SOL |
+| Low | Issues that don't pose a significant risk but should be addressed | 0.1-0.5 SOL |
+
+The final reward amount is determined at our discretion based on:
+- The potential impact of the vulnerability
+- The quality of the vulnerability report
+- The uniqueness of the finding
+- The clarity of proof-of-concept provided
+
+## Eligibility Requirements
+
+A vulnerability is eligible for reward if:
+- It is previously unreported
+- It affects the latest version of our contract
+- The reporter provides sufficient information to reproduce and fix the issue
+- The reporter allows a reasonable time for remediation before public disclosure
+
+## Scope
+
+This security policy covers the DONUT Referral Matrix System smart contract deployed at \`$PROGRAM_ID\`.
+
+## Out of Scope
+
+The following are considered out of scope:
+- Vulnerabilities in third-party applications or websites
+- Vulnerabilities requiring physical access to a user's device
+- Social engineering attacks
+- DoS attacks requiring excessive resources
+- Issues related to frontend applications rather than the smart contract itself
+
+## Responsible Disclosure
+
+We are committed to working with security researchers to verify and address any potential vulnerabilities reported. We request that:
+
+1. You give us reasonable time to investigate and address the vulnerability before any public disclosure
+2. You make a good faith effort to avoid privacy violations, data destruction, and interruption or degradation of our services
+3. You do not exploit the vulnerability beyond what is necessary to prove it exists
+
+## Acknowledgments
+
+We thank all security researchers who contribute to the security of our protocol. Contributors who discover valid vulnerabilities will be acknowledged (if desired) once the issue has been resolved.
+EOF
+
+    # Adicionar ao Git se houver alterações
+    git add SECURITY.md
+    if git diff --staged --quiet SECURITY.md; then
+        print_message "info" "SECURITY.md está atualizado."
+    else
+        git commit -m "Atualizar SECURITY.md com o Program ID: $PROGRAM_ID"
+        print_message "info" "SECURITY.md atualizado e commitado."
+    fi
+}
+
+# Função para corrigir os caminhos no lib.rs
+fix_lib_rs_urls() {
+    print_message "info" "Verificando e corrigindo URLs no lib.rs..."
+    
+    # Caminho para o lib.rs (ajuste conforme necessário)
+    LIB_RS_PATH="programs/matrix-system/src/lib.rs"
+    
+    if [ -f "$LIB_RS_PATH" ]; then
+        # Corrigir o caminho para SECURITY.md
+        sed -i 's|"https://github.com/ghost-ai91/matrix/SECURITY.md"|"https://github.com/ghost-ai91/matrix/blob/main/SECURITY.md"|g' "$LIB_RS_PATH"
+        
+        # Corrigir o caminho para src/lib.rs
+        sed -i 's|"https://github.com/ghost-ai91/matrix/programs/src/lib.rs"|"https://github.com/ghost-ai91/matrix/blob/main/programs/matrix-system/src/lib.rs"|g' "$LIB_RS_PATH"
+        
+        # Adicionar ao Git se houver alterações
+        git add "$LIB_RS_PATH"
+        if git diff --staged --quiet "$LIB_RS_PATH"; then
+            print_message "info" "URLs no lib.rs estão corretas."
+        else
+            git commit -m "Corrigir URLs no lib.rs para apontar para o branch main"
+            print_message "info" "URLs no lib.rs corrigidas e commitadas."
+        fi
+    else
+        print_message "warn" "Arquivo lib.rs não encontrado em $LIB_RS_PATH"
+    fi
+}
+
+# Nova função para mesclar para o branch principal após o deploy
+merge_to_main() {
+    print_message "info" "Mesclando alterações para o branch principal..."
+    
+    # Obter o branch atual
+    current_branch=$(git rev-parse --abbrev-ref HEAD)
+    
+    # Não fazer nada se já estivermos no branch main
+    if [ "$current_branch" = "main" ]; then
+        print_message "info" "Já estamos no branch principal, nenhuma mesclagem necessária."
+        return
+    fi
+    
+    # Verificar se o branch main existe localmente
+    if git show-ref --verify --quiet refs/heads/main; then
+        # Main existe localmente
+        print_message "info" "Branch main encontrado localmente."
+    else
+        # Main não existe localmente, verificar se existe remotamente
+        if git ls-remote --exit-code --heads origin main &>/dev/null; then
+            # Main existe remotamente, criar localmente
+            print_message "info" "Criando branch main localmente baseado no remoto..."
+            git branch main origin/main
+        else
+            # Main não existe nem local nem remotamente, criar um novo
+            print_message "info" "Branch main não encontrado. Criando um novo branch main..."
+            git checkout -b main
+            git checkout "$current_branch"
+        fi
+    fi
+    
+    # Fazer checkout para main
+    git checkout main
+    
+    # Tentar mesclar o branch atual
+    print_message "info" "Mesclando $current_branch para main..."
+    if git merge --no-ff "$current_branch" -m "Merge branch '$current_branch' para main"; then
+        print_message "info" "Mesclagem concluída com sucesso."
+        
+        # Enviar para o GitHub
+        print_message "info" "Enviando branch main para GitHub..."
+        if git push origin main; then
+            print_message "info" "Branch main enviado com sucesso para GitHub."
+        else
+            print_message "warn" "Falha ao enviar branch main para GitHub."
+        fi
+    else
+        print_message "error" "Conflitos detectados durante a mesclagem."
+        print_message "error" "Por favor, resolva os conflitos manualmente e faça push para o branch main."
+        git merge --abort
+        git checkout "$current_branch"
+    fi
+    
+    # Voltar para o branch original se diferente de main
+    if [ "$current_branch" != "main" ]; then
+        git checkout "$current_branch"
+    fi
+}
+
 # Função para configurar .gitignore adequado
 setup_gitignore() {
     print_message "info" "Configurando .gitignore para proteção de arquivos sensíveis..."
@@ -474,13 +646,6 @@ prepare_program_keypair() {
     # Exibir o Program ID
     PROGRAM_ID=$(solana-keygen pubkey $PROGRAM_KEYPAIR)
     print_message "info" "Program ID: $PROGRAM_ID"
-    
-    # Atualizar o SECURITY.md com o Program ID
-    if [ -f SECURITY.md ]; then
-        # Substituir o Program ID no arquivo SECURITY.md
-        sed -i "s/\`[a-zA-Z0-9]*\`/\`$PROGRAM_ID\`/" SECURITY.md
-        print_message "info" "SECURITY.md atualizado com o Program ID"
-    fi
 }
 
 # Função para obter o hash do commit e fazer build
@@ -825,6 +990,12 @@ main() {
     # Configurar .gitignore adequado
     setup_gitignore
     
+    # Garantir que SECURITY.md exista e esteja atualizado
+    ensure_security_md
+    
+    # Corrigir URLs no lib.rs
+    fix_lib_rs_urls
+    
     # Verificar arquivos sensíveis
     check_sensitive_files
     
@@ -846,6 +1017,12 @@ main() {
     read -p "Prosseguir com o deploy? (s/n): " do_deploy
     if [ "$do_deploy" = "s" ]; then
         deploy_program
+        
+        # Mesclar para o branch main após o deploy
+        read -p "Mesclar alterações para o branch main? (s/n): " do_merge
+        if [ "$do_merge" = "s" ]; then
+            merge_to_main
+        fi
     else
         print_message "info" "Deploy cancelado pelo usuário."
     fi
