@@ -51,12 +51,3 @@ program_dump.so
 *.pem
 *.key
 *.secret
-
-# Proteções adicionais para arquivos sensíveis
-**/*.keypair
-**/*keypair*.json
-**/*wallet*.json
-**/id.json
-**/*.secret
-*.pem
-*.key

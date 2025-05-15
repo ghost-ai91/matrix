@@ -3,23 +3,26 @@ use anchor_lang::solana_program::{self, clock::Clock};
 use anchor_spl::token::{self, Token, TokenAccount};
 use anchor_spl::associated_token::AssociatedToken;
 use chainlink_solana as chainlink;
+use solana_program::program_pack::Pack;
 #[cfg(not(feature = "no-entrypoint"))]
 use {solana_security_txt::security_txt};
+use default_env::default_env;
+
 
 declare_id!("jFUpBH7wTd9G1EfFADhJCZ89CSujPoh15bdWL5NutT9");
 
 #[cfg(not(feature = "no-entrypoint"))]
 security_txt! {
     name: "ReferralMatrixSystem",
-    project_url: "https://github.com/ghost-ai91/matrix",
-    contacts: "email:ghostninjax01@gmail.com,discord:ghostninjax01",
+    project_url: "https://matrix.matrix",
+    contacts: "email:01010101@mydonut.io,discord:01010101,whatsapp:+55123456789",
     policy: "https://github.com/ghost-ai91/matrix/SECURITY.md",
     preferred_languages: "en",
-    source_code: "https://github.com/seu-usuario-github/referral-matrix",
-    source_revision: "",
-    source_release: "",
-    encryption: "", 
-    auditors: "",   
+    source_code: "https://github.com/ghost-ai91/matrix/programs/src/lib.rs",
+    source_revision: default_env!("GITHUB_SHA", ""),
+    source_release: default_env!("PROGRAM_VERSION", ""),
+    encryption: "",
+    auditors: "",
     acknowledgements: "We thank all security researchers who contributed to the security of our protocol."
 }
 
@@ -41,10 +44,15 @@ const VAULT_A_ACCOUNTS_COUNT: usize = 3;
 // Constants for strict address verification
 pub mod verified_addresses {
     use solana_program::pubkey::Pubkey;
+
+    // Vault A addresses 
+    pub static A_VAULT_LP: Pubkey = solana_program::pubkey!("3NNXTmZPY2wwotbz8eRU5F9PpnDYG9vVMv5GYArSWA7F");
+    pub static A_VAULT_LP_MINT: Pubkey = solana_program::pubkey!("6toHu9J2rUigsStD4GNyCbMiybbqFhYjWnZtiHkRYrou");
+    pub static A_TOKEN_VAULT: Pubkey = solana_program::pubkey!("FnEXDYHyyN7ZBCsjZDx7psoCsVRTJ9orVC7ijtQuVhyv");
     
     // Meteora pool addresses
-    pub static POOL_ADDRESS: Pubkey = solana_program::pubkey!("CH8thKKhqGLQzwZwNYkEfRdkoxJBALNSSzmW1bVAkwat");
-    pub static B_VAULT_LP: Pubkey = solana_program::pubkey!("HayCbdhLpmqpbqQjjArmCbF9oZumTD7PbvxcHtjf8JhK");
+    pub static POOL_ADDRESS: Pubkey = solana_program::pubkey!("H7RMjuMb8GAv3NxvvsqLVHf4kyroagoeqmDiiM8198j9");
+    pub static B_VAULT_LP: Pubkey = solana_program::pubkey!("C3yfTo4r7AhpgDpmmjVG34WaUKV749748TXEgRCsBYK7");
     
     // Token and oracle addresses
     pub static TOKEN_MINT: Pubkey = solana_program::pubkey!("H4T9Y1wGsexYKYshYbqHG3fKhu16nkJhyYQArp1Q1Adj");
@@ -116,6 +124,16 @@ impl UserAccount {
 // Error codes
 #[error_code]
 pub enum ErrorCode {
+
+    #[msg("Invalid vault A LP address")]
+    InvalidVaultALpAddress,
+    
+    #[msg("Invalid vault A LP mint address")]
+    InvalidVaultALpMintAddress,
+    
+    #[msg("Invalid token A vault address")]
+    InvalidTokenAVaultAddress,
+
     #[msg("Referrer account is not registered")]
     ReferrerNotRegistered,
 
@@ -316,8 +334,9 @@ fn calculate_minimum_sol_deposit<'info>(
     Ok(minimum_lamports)
 }
 
-// Function to calculate DONUT tokens equivalent to a SOL value
-// based on the real quote from Meteora pool
+/// Uses Meteora pool data to derive the real-time exchange rate
+/// Ensures precise calculations at any scale, from 0.000000001 to millions of tokens
+/// Calculate DONUT tokens equivalent to a SOL amount using simplified calculation with high precision
 fn get_donut_tokens_amount<'info>(
     a_vault_lp: &AccountInfo<'info>,
     b_vault_lp: &AccountInfo<'info>,
@@ -327,112 +346,106 @@ fn get_donut_tokens_amount<'info>(
     b_token_vault: &AccountInfo<'info>,
     sol_amount: u64,
 ) -> Result<u64> {
-    // Constants for data offsets in accounts
-    const AMOUNT_OFFSET: usize = 64; // Offset for the 'amount' field in Token accounts
-    const SUPPLY_OFFSET: usize = 36; // Offset for the 'supply' field in Mint accounts
+    // Constantes para cálculos
+    const METEORA_FEE: i128 = 1800; // 3.25%
+    const FEE_DENOMINATOR: i128 = 10000; // Base para percentuais
+    const PRECISION_FACTOR: i128 = 1_000_000_000; // Para precisão em divisões
     
-    // Variables to store read values
-    let mut a_vault_lp_amount: u64 = 0;
-    let mut b_vault_lp_amount: u64 = 0;
-    let mut a_vault_lp_supply: u64 = 0;
-    let mut b_vault_lp_supply: u64 = 0;
-    let mut total_token_a_amount: u64 = 0;
-    let mut total_token_b_amount: u64 = 0;
+    // Log do parâmetro de entrada
+    msg!("get_donut_tokens_amount called with sol_amount: {}", sol_amount);
     
-    // 1. Reading LP token values from the pool
+    // 1. Leitura dos valores de tokens LP usando desserialização
+    let a_vault_lp_amount: u64;
+    let b_vault_lp_amount: u64;
+    
     {
-        let a_vault_lp_data_result = a_vault_lp.try_borrow_data();
-        let b_vault_lp_data_result = b_vault_lp.try_borrow_data();
+        // Desserializa as contas de token LP
+        let a_vault_lp_data = match spl_token::state::Account::unpack(&a_vault_lp.try_borrow_data()?) {
+            Ok(data) => data,
+            Err(_) => {
+                msg!("Error reading LP data");
+                return Ok(100 * 1_000_000_000);
+            }
+        };
+            
+        let b_vault_lp_data = match spl_token::state::Account::unpack(&b_vault_lp.try_borrow_data()?) {
+            Ok(data) => data,
+            Err(_) => {
+                msg!("Error reading LP data");
+                return Ok(100 * 1_000_000_000);
+            }
+        };
         
-        if a_vault_lp_data_result.is_err() || b_vault_lp_data_result.is_err() {
-            return Ok(100 * 1_000_000_000); // Fallback to 100 tokens
-        }
-        
-        let a_vault_lp_data = a_vault_lp_data_result.unwrap();
-        let b_vault_lp_data = b_vault_lp_data_result.unwrap();
-        
-        if a_vault_lp_data.len() < AMOUNT_OFFSET + 8 || b_vault_lp_data.len() < AMOUNT_OFFSET + 8 {
-            return Ok(100 * 1_000_000_000); // Fallback to 100 tokens
-        }
-        
-        // Read u64 directly from bytes
-        let mut a_bytes = [0u8; 8];
-        let mut b_bytes = [0u8; 8];
-        
-        a_bytes.copy_from_slice(&a_vault_lp_data[AMOUNT_OFFSET..AMOUNT_OFFSET+8]);
-        b_bytes.copy_from_slice(&b_vault_lp_data[AMOUNT_OFFSET..AMOUNT_OFFSET+8]);
-        
-        a_vault_lp_amount = u64::from_le_bytes(a_bytes);
-        b_vault_lp_amount = u64::from_le_bytes(b_bytes);
+        a_vault_lp_amount = a_vault_lp_data.amount;
+        b_vault_lp_amount = b_vault_lp_data.amount;
+        msg!("LP amounts - A: {}, B: {}", a_vault_lp_amount, b_vault_lp_amount);
     }
     
-    // Force cleanup after first block
     force_memory_cleanup();
     
-    // 2. Reading total supplies of LP tokens
+    // 2. Leitura dos supplies totais de tokens LP
+    let a_vault_lp_supply: u64;
+    let b_vault_lp_supply: u64;
+    
     {
-        let a_vault_lp_mint_data_result = a_vault_lp_mint.try_borrow_data();
-        let b_vault_lp_mint_data_result = b_vault_lp_mint.try_borrow_data();
+        let a_vault_lp_mint_data = match spl_token::state::Mint::unpack(&a_vault_lp_mint.try_borrow_data()?) {
+            Ok(data) => data,
+            Err(_) => {
+                msg!("Error reading LP mint data");
+                return Ok(100 * 1_000_000_000);
+            }
+        };
+            
+        let b_vault_lp_mint_data = match spl_token::state::Mint::unpack(&b_vault_lp_mint.try_borrow_data()?) {
+            Ok(data) => data,
+            Err(_) => {
+                msg!("Error reading LP mint data");
+                return Ok(100 * 1_000_000_000);
+            }
+        };
         
-        if a_vault_lp_mint_data_result.is_err() || b_vault_lp_mint_data_result.is_err() {
-            return Ok(100 * 1_000_000_000); // Fallback to 100 tokens
-        }
-        
-        let a_vault_lp_mint_data = a_vault_lp_mint_data_result.unwrap();
-        let b_vault_lp_mint_data = b_vault_lp_mint_data_result.unwrap();
-        
-        if a_vault_lp_mint_data.len() < SUPPLY_OFFSET + 8 || b_vault_lp_mint_data.len() < SUPPLY_OFFSET + 8 {
-            return Ok(100 * 1_000_000_000); // Fallback to 100 tokens
-        }
-        
-        let mut a_bytes = [0u8; 8];
-        let mut b_bytes = [0u8; 8];
-        
-        a_bytes.copy_from_slice(&a_vault_lp_mint_data[SUPPLY_OFFSET..SUPPLY_OFFSET+8]);
-        b_bytes.copy_from_slice(&b_vault_lp_mint_data[SUPPLY_OFFSET..SUPPLY_OFFSET+8]);
-        
-        a_vault_lp_supply = u64::from_le_bytes(a_bytes);
-        b_vault_lp_supply = u64::from_le_bytes(b_bytes);
+        a_vault_lp_supply = a_vault_lp_mint_data.supply;
+        b_vault_lp_supply = b_vault_lp_mint_data.supply;
+        msg!("LP supplies - A: {}, B: {}", a_vault_lp_supply, b_vault_lp_supply);
     }
     
-    // Force cleanup after second block
     force_memory_cleanup();
     
-    // 3. Reading total token values in vaults
+    // 3. Leitura dos valores totais de tokens nos vaults
+    let total_token_a_amount: u64;
+    let total_token_b_amount: u64;
+    
     {
-        let a_token_vault_data_result = a_token_vault.try_borrow_data();
-        let b_token_vault_data_result = b_token_vault.try_borrow_data();
+        let a_token_vault_data = match spl_token::state::Account::unpack(&a_token_vault.try_borrow_data()?) {
+            Ok(data) => data,
+            Err(_) => {
+                msg!("Error reading token vault data");
+                return Ok(100 * 1_000_000_000);
+            }
+        };
+            
+        let b_token_vault_data = match spl_token::state::Account::unpack(&b_token_vault.try_borrow_data()?) {
+            Ok(data) => data,
+            Err(_) => {
+                msg!("Error reading token vault data");
+                return Ok(100 * 1_000_000_000);
+            }
+        };
         
-        if a_token_vault_data_result.is_err() || b_token_vault_data_result.is_err() {
-            return Ok(100 * 1_000_000_000); // Fallback to 100 tokens
-        }
-        
-        let a_token_vault_data = a_token_vault_data_result.unwrap();
-        let b_token_vault_data = b_token_vault_data_result.unwrap();
-        
-        if a_token_vault_data.len() < AMOUNT_OFFSET + 8 || b_token_vault_data.len() < AMOUNT_OFFSET + 8 {
-            return Ok(100 * 1_000_000_000); // Fallback to 100 tokens
-        }
-        
-        let mut a_bytes = [0u8; 8];
-        let mut b_bytes = [0u8; 8];
-        
-        a_bytes.copy_from_slice(&a_token_vault_data[AMOUNT_OFFSET..AMOUNT_OFFSET+8]);
-        b_bytes.copy_from_slice(&b_token_vault_data[AMOUNT_OFFSET..AMOUNT_OFFSET+8]);
-        
-        total_token_a_amount = u64::from_le_bytes(a_bytes);
-        total_token_b_amount = u64::from_le_bytes(b_bytes);
+        total_token_a_amount = a_token_vault_data.amount;
+        total_token_b_amount = b_token_vault_data.amount;
+        msg!("Total token amounts - A: {}, B: {}", total_token_a_amount, total_token_b_amount);
     }
     
-    // Force cleanup after third block
     force_memory_cleanup();
     
-    // 4. Check values to avoid division by zero
+    // 4. Verificar valores zero para evitar divisão por zero
     if a_vault_lp_supply == 0 || b_vault_lp_supply == 0 || total_token_a_amount == 0 || total_token_b_amount == 0 {
-        return Ok(100 * 1_000_000_000); // Fallback to 100 tokens
+        msg!("Zero values detected, using fallback");
+        return Ok(100 * 1_000_000_000);
     }
     
-    // 5. Convert to i128 for safe calculations without floating point
+    // 5. Converter para i128 para cálculos seguros
     let a_lp_amount_big = a_vault_lp_amount as i128;
     let a_lp_supply_big = a_vault_lp_supply as i128;
     let b_lp_amount_big = b_vault_lp_amount as i128;
@@ -441,37 +454,147 @@ fn get_donut_tokens_amount<'info>(
     let token_b_big = total_token_b_amount as i128;
     let sol_amount_big = sol_amount as i128;
     
-    // 6. Calculate pool token values using integer arithmetic
-    let numerator_a = token_a_big.checked_mul(a_lp_amount_big)
-        .ok_or_else(|| error!(ErrorCode::InvalidPriceFeed))?;
+    // 6. Calcular quantidades de tokens na pool com operações seguras
+    let pool_token_a = match token_a_big.checked_mul(a_lp_amount_big) {
+        Some(num) => match num.checked_div(a_lp_supply_big) {
+            Some(result) => result,
+            None => {
+                msg!("Division by zero in pool_token_a calculation");
+                return Ok(100 * 1_000_000_000);
+            }
+        },
+        None => {
+            msg!("Overflow in pool_token_a calculation");
+            return Ok(100 * 1_000_000_000);
+        }
+    };
     
-    let numerator_b = token_b_big.checked_mul(b_lp_amount_big)
-        .ok_or_else(|| error!(ErrorCode::InvalidPriceFeed))?;
+    let pool_token_b = match token_b_big.checked_mul(b_lp_amount_big) {
+        Some(num) => match num.checked_div(b_lp_supply_big) {
+            Some(result) => result,
+            None => {
+                msg!("Division by zero in pool_token_b calculation");
+                return Ok(100 * 1_000_000_000);
+            }
+        },
+        None => {
+            msg!("Overflow in pool_token_b calculation");
+            return Ok(100 * 1_000_000_000);
+        }
+    };
     
-    let pool_token_a = numerator_a / a_lp_supply_big;
-    let pool_token_b = numerator_b / b_lp_supply_big;
+    msg!("Pool tokens - A: {}, B: {}", pool_token_a, pool_token_b);
     
-    // 7. Check for zero values to avoid division by zero
-    if pool_token_b == 0 {
+    // 7. Verificar valores zero
+    if pool_token_a == 0 || pool_token_b == 0 {
+        msg!("Zero pool tokens, using fallback");
         return Ok(100 * 1_000_000_000);
     }
     
-    // 8. Calculate DONUT tokens using cross multiplication
-    let numerator_final = sol_amount_big.checked_mul(pool_token_a)
-        .ok_or_else(|| error!(ErrorCode::InvalidPriceFeed))?;
+    // 8. Calcular a razão básica com verificações de overflow
+    let basic_ratio = match pool_token_a.checked_mul(PRECISION_FACTOR) {
+        Some(num) => match num.checked_div(pool_token_b) {
+            Some(result) => result,
+            None => {
+                msg!("Division by zero in basic_ratio calculation");
+                return Ok(100 * 1_000_000_000);
+            }
+        },
+        None => {
+            msg!("Overflow in basic_ratio calculation");
+            return Ok(100 * 1_000_000_000);
+        }
+    };
     
-    let donut_tokens_big = numerator_final / pool_token_b;
+    msg!("Basic ratio without fees (scaled): {}", basic_ratio);
     
-    // 9. Convert back to u64 with overflow check
+    // 9. Calcular o multiplicador de taxa com verificações de overflow
+    let fee_multiplier = match FEE_DENOMINATOR.checked_mul(PRECISION_FACTOR) {
+        Some(num) => {
+            let denominator = match FEE_DENOMINATOR.checked_sub(METEORA_FEE) {
+                Some(val) => val,
+                None => {
+                    msg!("Underflow in fee denominator calculation");
+                    return Ok(100 * 1_000_000_000);
+                }
+            };
+            
+            match num.checked_div(denominator) {
+                Some(result) => result,
+                None => {
+                    msg!("Division by zero in fee_multiplier calculation");
+                    return Ok(100 * 1_000_000_000);
+                }
+            }
+        },
+        None => {
+            msg!("Overflow in fee_multiplier calculation");
+            return Ok(100 * 1_000_000_000);
+        }
+    };
+    
+    msg!("Fee multiplier (scaled): {}", fee_multiplier);
+    
+    // 10. Aplicar o multiplicador de taxa com verificações de overflow
+    let fee_adjusted_ratio = match basic_ratio.checked_mul(fee_multiplier) {
+        Some(num) => match num.checked_div(PRECISION_FACTOR) {
+            Some(result) => result,
+            None => {
+                msg!("Division by zero in fee_adjusted_ratio calculation");
+                return Ok(100 * 1_000_000_000);
+            }
+        },
+        None => {
+            msg!("Overflow in fee_adjusted_ratio calculation");
+            return Ok(100 * 1_000_000_000);
+        }
+    };
+    
+    msg!("Fee adjusted ratio (scaled): {}", fee_adjusted_ratio);
+    
+    // 11. Calcular tokens com verificações de overflow
+    let donut_tokens_scaled = match sol_amount_big.checked_mul(fee_adjusted_ratio) {
+        Some(result) => result,
+        None => {
+            msg!("Overflow in donut_tokens_scaled calculation");
+            return Ok(100 * 1_000_000_000);
+        }
+    };
+    
+    msg!("Donut tokens scaled: {}", donut_tokens_scaled);
+    
+    //12. Remover fator de precisão com verificações de overflow
+    let donut_tokens_big = match donut_tokens_scaled.checked_div(PRECISION_FACTOR) {
+        Some(result) => result,
+        None => {
+            msg!("Division by zero in donut_tokens_big calculation");
+            return Ok(100 * 1_000_000_000);
+        }
+    };
+
+    msg!("donut_tokens_big (i128): {}", donut_tokens_big);
+    
+    //13. Verificar overflow para u64
     if donut_tokens_big > i128::from(u64::MAX) {
+        msg!("donut_tokens_big exceeds u64::MAX");
         return Ok(100 * 1_000_000_000);
     }
-    
+
+    //14. Converter para u64
     let donut_tokens = donut_tokens_big as u64;
+
+    msg!("Final donut_tokens (u64): {}", donut_tokens);
     
-    // 10. Validate if we have a realistic value and return
+    // 15. Validar que temos um valor não-zero
     if donut_tokens == 0 {
-        return Ok(100 * 1_000_000_000); // Fallback to 100 tokens
+        // Se o cálculo original era positivo mas foi truncado para zero
+        if donut_tokens_big > 0 {
+            msg!("Small positive value truncated to zero, returning minimum value");
+            return Ok(1); // 0.000000001 DONUT (menor valor possível)
+        }
+        
+        msg!("donut_tokens is zero, using fallback");
+        return Ok(100 * 1_000_000_000);
     }
     
     Ok(donut_tokens)
@@ -482,6 +605,19 @@ fn verify_address_strict(provided: &Pubkey, expected: &Pubkey, error_code: Error
     if provided != expected {
         return Err(error!(error_code));
     }
+    Ok(())
+}
+
+//verify vault a
+fn verify_vault_a_addresses<'info>(
+    a_vault_lp: &Pubkey,
+    a_vault_lp_mint: &Pubkey,
+    a_token_vault: &Pubkey
+) -> Result<()> {
+    verify_address_strict(a_vault_lp, &verified_addresses::A_VAULT_LP, ErrorCode::InvalidVaultALpAddress)?;
+    verify_address_strict(a_vault_lp_mint, &verified_addresses::A_VAULT_LP_MINT, ErrorCode::InvalidVaultALpMintAddress)?;
+    verify_address_strict(a_token_vault, &verified_addresses::A_TOKEN_VAULT, ErrorCode::InvalidTokenAVaultAddress)?;
+    
     Ok(())
 }
 
@@ -1070,6 +1206,13 @@ pub mod referral_system {
         let a_vault_lp_mint = &ctx.remaining_accounts[1];
         let a_token_vault = &ctx.remaining_accounts[2];
 
+            // Verificar os endereços do Vault A
+        verify_vault_a_addresses(
+        &a_vault_lp.key(),
+        &a_vault_lp_mint.key(),
+        &a_token_vault.key()
+         )?;
+
         // Extract Chainlink accounts from remaining_accounts
         let chainlink_feed = &ctx.remaining_accounts[3];
         let chainlink_program = &ctx.remaining_accounts[4];
@@ -1631,12 +1774,11 @@ pub mod referral_system {
                             
                             // Check if matrix is complete
                             let chain_completed = upline_account_data.chain.filled_slots == 3;
-                            let mut next_chain_id_value = 0;
                             
                             // Process matrix completion only if necessary
                             if chain_completed {
                                 // Get new ID for the reset matrix
-                                next_chain_id_value = state.next_chain_id;
+                                let next_chain_id_value = state.next_chain_id;
                                 state.next_chain_id += 1;
                                 
                                 // Reset matrix with new ID
