@@ -1031,62 +1031,69 @@ create_github_release() {
     # Determinar qual branch estamos
     CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
     
-    # Preparar a descrição do release
     # Detectar se estamos em devnet ou mainnet
     NETWORK=$(echo "$RPC_URL" | grep -q "mainnet" && echo "Mainnet" || echo "Devnet")
     
-    RELEASE_NOTES="# DONUT Referral Matrix System Release $RELEASE_TAG
-
-## Detalhes do Deploy
-- Data: $(date)
-- Program ID: \`$PROGRAM_ID\`
-- Commit: \`$COMMIT_HASH\`
-- Rede: $NETWORK
-- Branch: $CURRENT_BRANCH
-
-## Verificação
-Este release foi verificado e o hash do commit está incorporado no programa para garantir a integridade.
-
-## Alterações desde o último release
-$(git log -n 5 --pretty=format:"- %s")
-"
-
-    # Criar o release usando a API do GitHub
+    # Usar método mais simples usando arquivo temporário
     print_message "info" "Enviando release para o GitHub..."
     
-    # Escapar aspas duplas na descrição para evitar problemas de JSON
-    RELEASE_NOTES_ESCAPED=$(echo "$RELEASE_NOTES" | sed 's/"/\\"/g')
+    # Criar JSON simples e limpo
+    TEMP_FILE=$(mktemp)
+    cat > "$TEMP_FILE" << EOF
+{
+  "tag_name": "$RELEASE_TAG",
+  "name": "DONUT Matrix System $RELEASE_TAG",
+  "body": "Deploy em $(date)\\n\\nProgram ID: $PROGRAM_ID\\nCommit: $COMMIT_HASH\\nRede: $NETWORK",
+  "draft": false,
+  "prerelease": $(echo "$RPC_URL" | grep -q "mainnet" && echo "false" || echo "true")
+}
+EOF
     
-    # Determinar se é um pré-release baseado na rede
-    IS_PRERELEASE=$(echo "$RPC_URL" | grep -q "mainnet" && echo "false" || echo "true")
+    # Exibir o conteúdo do JSON para depuração
+    print_message "info" "Conteúdo do JSON que será enviado:"
+    cat "$TEMP_FILE"
     
-    # Construir o payload JSON do release
-    JSON_PAYLOAD="{
-        \"tag_name\": \"$RELEASE_TAG\",
-        \"target_commitish\": \"$CURRENT_BRANCH\",
-        \"name\": \"DONUT Matrix System $RELEASE_TAG\",
-        \"body\": \"$RELEASE_NOTES_ESCAPED\",
-        \"draft\": false,
-        \"prerelease\": $IS_PRERELEASE
-    }"
-    
-    # Criar o release via API GitHub
+    # Enviar solicitação para criar o release
     RESPONSE=$(curl -s -X POST \
       -H "Authorization: token $GITHUB_TOKEN" \
-      -H "Accept: application/vnd.github.v3+json" \
+      -H "Accept: application/vnd.github+json" \
+      -H "Content-Type: application/json" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
       https://api.github.com/repos/$GITHUB_USER/$REPO_NAME/releases \
-      -d "$JSON_PAYLOAD")
+      --data @"$TEMP_FILE")
+    
+    # Remover arquivo temporário
+    rm -f "$TEMP_FILE"
     
     # Verificar se o release foi criado com sucesso
     if echo "$RESPONSE" | grep -q "html_url"; then
-        # Extrair URL do release da resposta
         RELEASE_URL=$(echo "$RESPONSE" | grep -o '"html_url":"[^"]*"' | head -1 | cut -d'"' -f4)
         print_message "info" "Release criado com sucesso: $RELEASE_URL"
         return 0
     else
         print_message "error" "Falha ao criar release. Resposta da API:"
         echo "$RESPONSE"
-        return 1
+        
+        # Se falhar, tentar um JSON ainda mais simples
+        print_message "info" "Tentando com formato JSON mínimo..."
+        
+        RESPONSE=$(curl -s -X POST \
+          -H "Authorization: token $GITHUB_TOKEN" \
+          -H "Accept: application/vnd.github+json" \
+          -H "Content-Type: application/json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/$GITHUB_USER/$REPO_NAME/releases \
+          -d "{\"tag_name\":\"$RELEASE_TAG\",\"name\":\"Release $RELEASE_TAG\",\"body\":\"Program ID: $PROGRAM_ID\"}")
+        
+        if echo "$RESPONSE" | grep -q "html_url"; then
+            RELEASE_URL=$(echo "$RESPONSE" | grep -o '"html_url":"[^"]*"' | head -1 | cut -d'"' -f4)
+            print_message "info" "Release criado com sucesso usando formato mínimo: $RELEASE_URL"
+            return 0
+        else
+            print_message "error" "Todas as tentativas de criação de release falharam. Resposta final:"
+            echo "$RESPONSE"
+            return 1
+        fi
     fi
 }
 
