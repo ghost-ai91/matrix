@@ -6,7 +6,6 @@ use chainlink_solana as chainlink;
 use solana_program::program_pack::Pack;
 #[cfg(not(feature = "no-entrypoint"))]
 use {solana_security_txt::security_txt};
-use default_env::default_env;
 
 
 declare_id!("jFUpBH7wTd9G1EfFADhJCZ89CSujPoh15bdWL5NutT9");

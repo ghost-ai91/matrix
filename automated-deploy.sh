@@ -731,15 +731,15 @@ deploy_program() {
             --max-sign-attempts 10 \
             --use-rpc)
     else
-        # Deploy como upgrade
+        # Deploy como upgrade - corrigido para usar a sintaxe correta para versão 1.18.15
+        # Nota: Removido o argumento --upgrade que causava erro
         DEPLOY_RESULT=$(solana program deploy $PROGRAM_SO \
             --program-id $PROGRAM_KEYPAIR \
             --buffer $BUFFER_ID \
             --max-len $MAX_PROGRAM_SIZE \
             --with-compute-unit-price $COMPUTE_UNIT_PRICE \
             --max-sign-attempts 10 \
-            --use-rpc \
-            --upgrade)
+            --use-rpc)
     fi
     
     echo "$DEPLOY_RESULT"
@@ -751,21 +751,27 @@ deploy_program() {
     print_message "info" "Verificando o programa na blockchain..."
     solana program show $PROGRAM_ID
     
-    # Verificar hash incorporado
+    # Verificar hash incorporado - corrigindo o comando de dump
     print_message "info" "Verificando se o hash foi incorporado corretamente..."
-    solana program dump -o program_dump.so $PROGRAM_ID
+    # Corrigido para usar a sintaxe correta para versão 1.18.15
+    solana program dump $PROGRAM_ID program_dump.so
     
-    if strings program_dump.so | grep -q "$COMMIT_HASH"; then
+    if [ -f program_dump.so ] && strings program_dump.so | grep -q "$COMMIT_HASH"; then
         print_message "info" "Hash do commit ($COMMIT_HASH) incorporado e verificado!"
     else
-        print_message "warn" "Hash do commit não encontrado no programa implantado. Verifique a saída completa abaixo:"
-        strings program_dump.so | grep -A 10 -B 10 security_txt
+        print_message "warn" "Hash do commit não encontrado no programa implantado ou não foi possível baixar o programa."
+        if [ -f program_dump.so ]; then
+            print_message "info" "Verificando conteúdo do programa baixado:"
+            strings program_dump.so | grep -A 10 -B 10 security_txt || true
+        else
+            print_message "warn" "Não foi possível baixar o programa para verificação."
+        fi
     fi
     
     # Verificar a versão incorporada
     if [ -n "$PROGRAM_VERSION" ]; then
         print_message "info" "Verificando se a versão foi incorporada corretamente..."
-        if strings program_dump.so | grep -q "$PROGRAM_VERSION"; then
+        if [ -f program_dump.so ] && strings program_dump.so | grep -q "$PROGRAM_VERSION"; then
             print_message "info" "Versão ($PROGRAM_VERSION) incorporada e verificada!"
         else
             print_message "warn" "Versão não encontrada no programa implantado."
