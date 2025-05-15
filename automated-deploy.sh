@@ -975,6 +975,121 @@ deploy_program() {
     fi
 }
 
+# Nova função para criar release no GitHub
+create_github_release() {
+    print_message "info" "Criando release no GitHub..."
+    
+    # Verificar se temos o comando curl
+    if ! command -v curl &> /dev/null; then
+        print_message "error" "O comando 'curl' não está instalado. Ele é necessário para criar releases."
+        print_message "info" "Você pode instalá-lo com: sudo apt-get install curl"
+        return 1
+    fi
+    
+    # Verificar se há token do GitHub
+    if [ -z "$GITHUB_TOKEN" ]; then
+        print_message "warn" "Token GitHub necessário para criar release."
+        read -sp "Digite seu token GitHub (não aparecerá na tela): " GITHUB_TOKEN
+        echo ""
+        if [ -z "$GITHUB_TOKEN" ]; then
+            print_message "error" "Nenhum token fornecido. Não é possível criar o release."
+            return 1
+        fi
+    fi
+    
+    # Determinar qual tag usar para o release
+    if [ -n "$PROGRAM_VERSION" ] && [[ "$PROGRAM_VERSION" == v* ]]; then
+        # Usar a versão do programa se estiver no formato correto (v*)
+        RELEASE_TAG="$PROGRAM_VERSION"
+    else
+        # Usar a tag de deploy criada durante o deploy
+        if [ -n "$DEPLOY_TAG" ]; then
+            RELEASE_TAG="$DEPLOY_TAG"
+        else
+            # Criar uma nova tag se nenhuma existir
+            RELEASE_TAG="v1.0.0-release-$(date +%Y%m%d%H%M%S)"
+            git tag -a "$RELEASE_TAG" -m "Release criado em $(date): Program ID $PROGRAM_ID"
+            print_message "info" "Nova tag $RELEASE_TAG criada para o release"
+            
+            # Enviar a nova tag para o GitHub
+            if git push origin "$RELEASE_TAG"; then
+                print_message "info" "Tag $RELEASE_TAG enviada para o GitHub"
+            else
+                print_message "warn" "Falha ao enviar a tag $RELEASE_TAG"
+            fi
+        fi
+    fi
+    
+    # Obter o Program ID
+    PROGRAM_ID=$(solana-keygen pubkey $PROGRAM_KEYPAIR)
+    
+    # Verificar se o hash do commit está disponível
+    if [ -z "$COMMIT_HASH" ]; then
+        COMMIT_HASH=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+    fi
+    
+    # Determinar qual branch estamos
+    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    
+    # Preparar a descrição do release
+    # Detectar se estamos em devnet ou mainnet
+    NETWORK=$(echo "$RPC_URL" | grep -q "mainnet" && echo "Mainnet" || echo "Devnet")
+    
+    RELEASE_NOTES="# DONUT Referral Matrix System Release $RELEASE_TAG
+
+## Detalhes do Deploy
+- Data: $(date)
+- Program ID: \`$PROGRAM_ID\`
+- Commit: \`$COMMIT_HASH\`
+- Rede: $NETWORK
+- Branch: $CURRENT_BRANCH
+
+## Verificação
+Este release foi verificado e o hash do commit está incorporado no programa para garantir a integridade.
+
+## Alterações desde o último release
+$(git log -n 5 --pretty=format:"- %s")
+"
+
+    # Criar o release usando a API do GitHub
+    print_message "info" "Enviando release para o GitHub..."
+    
+    # Escapar aspas duplas na descrição para evitar problemas de JSON
+    RELEASE_NOTES_ESCAPED=$(echo "$RELEASE_NOTES" | sed 's/"/\\"/g')
+    
+    # Determinar se é um pré-release baseado na rede
+    IS_PRERELEASE=$(echo "$RPC_URL" | grep -q "mainnet" && echo "false" || echo "true")
+    
+    # Construir o payload JSON do release
+    JSON_PAYLOAD="{
+        \"tag_name\": \"$RELEASE_TAG\",
+        \"target_commitish\": \"$CURRENT_BRANCH\",
+        \"name\": \"DONUT Matrix System $RELEASE_TAG\",
+        \"body\": \"$RELEASE_NOTES_ESCAPED\",
+        \"draft\": false,
+        \"prerelease\": $IS_PRERELEASE
+    }"
+    
+    # Criar o release via API GitHub
+    RESPONSE=$(curl -s -X POST \
+      -H "Authorization: token $GITHUB_TOKEN" \
+      -H "Accept: application/vnd.github.v3+json" \
+      https://api.github.com/repos/$GITHUB_USER/$REPO_NAME/releases \
+      -d "$JSON_PAYLOAD")
+    
+    # Verificar se o release foi criado com sucesso
+    if echo "$RESPONSE" | grep -q "html_url"; then
+        # Extrair URL do release da resposta
+        RELEASE_URL=$(echo "$RESPONSE" | grep -o '"html_url":"[^"]*"' | head -1 | cut -d'"' -f4)
+        print_message "info" "Release criado com sucesso: $RELEASE_URL"
+        return 0
+    else
+        print_message "error" "Falha ao criar release. Resposta da API:"
+        echo "$RESPONSE"
+        return 1
+    fi
+}
+
 # Função principal
 main() {
     print_message "info" "=== Iniciando processo automatizado de deploy ==="
@@ -1022,6 +1137,12 @@ main() {
         read -p "Mesclar alterações para o branch main? (s/n): " do_merge
         if [ "$do_merge" = "s" ]; then
             merge_to_main
+        fi
+        
+        # NOVA PARTE: Criar release no GitHub
+        read -p "Criar release no GitHub? (s/n): " do_release
+        if [ "$do_release" = "s" ]; then
+            create_github_release
         fi
     else
         print_message "info" "Deploy cancelado pelo usuário."
